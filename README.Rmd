@@ -1,0 +1,215 @@
+---
+output: github_document
+---
+
+<!-- README.md is generated from README.Rmd. Please edit that file -->
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  warning = FALSE,
+  message = FALSE,
+  error = FALSE,
+  comment = "#>"
+)
+```
+
+# Análise de dados - Messias
+
+Banco de dados referente à produção da cana-de-açúcar, anos de 2016 a 2018, e atributos do solo.
+
+### Carregando pacotes
+```{r}
+library(tidyverse)
+library(sp)
+library(vegan)
+library(readxl)
+library(gstat)
+library(plotly)
+theme_set(theme_bw())
+```
+
+### Arrumando o banco de dados no excel.
+
+```{r}
+# list_files <- list.files("data-raw", full.names = TRUE)
+# 
+# my_read_xl <- function(path){
+#   read_excel(path) %>% 
+#     mutate(
+#   ano = str_extract(path,"[0-9]+")
+#   ) %>% relocate(ano)
+# }
+# my_read_xl(list_files[3])
+# dff <- map_df(list_files,my_read_xl)
+# write_rds(dff, "data/sugarcane-soil-production.rds")
+```
+
+### Lendo o banco em rds
+
+```{r}
+data_set <- read_rds("data/sugarcane-soil-production.rds")
+contorno <- read.table("data/coordenadas-contorno.txt",sep=",",h=TRUE)
+p <- Polygon(contorno)
+ps <- Polygons(list(p),1)
+contorno_ps <- SpatialPolygons(list(ps))
+def_pol <- function(x, y, pol){
+  as.logical(sp::point.in.polygon(point.x = x,
+                                  point.y = y,
+                                  pol.x = pol[,1],
+                                  pol.y = pol[,2]))
+}
+```
+
+```{r}
+x<-data_set$x
+y<-data_set$y
+dis <- 0.005 #Distância entre pontos
+grid <- expand.grid(X=seq(min(x),max(x),dis), Y=seq(min(y),max(y),dis)) %>% 
+    mutate(flag = def_pol(X,Y,contorno)) %>%  
+  filter(flag) %>% select(-flag)
+gridded(grid) = ~ X + Y
+plot(grid) 
+points(x,y,col="red",pch=4,add=TRUE)
+```
+
+### Conhecendo o Banco de dados
+
+```{r}
+data_set %>% 
+  filter(ano == 2016) %>% 
+  ggplot(aes(x=x, y=y)) +
+  geom_point()
+# ggplotly(plot_graph)
+```
+
+```{r}
+glimpse(data_set)
+```
+
+
+### Separa o banco de dados por ano e por variáveis
+
+```{r}
+ano_analise <- 2016
+variavel <- "tch_real"
+data_set_aux <- data_set %>% 
+  filter(ano == ano_analise) %>% 
+  select(x,y,variavel)
+names(data_set_aux) <- c("x","y","z")
+glimpse(data_set_aux)
+```
+
+### Calcular a média da variável por ponto
+```{r}
+data_set_aux <- data_set_aux %>% 
+  group_by(x,y) %>% 
+  summarise(
+    z = mean(z,na.rm = TRUE)
+  )
+```
+
+### Análise exoploratória
+
+```{r}
+data_set_aux %>% 
+  pull(z) %>% 
+  summary()
+```
+```{r}
+data_set_aux %>% 
+  ggplot(aes(y=z)) +
+  geom_boxplot(fill="gray") +
+  xlim(-1,1) +
+  labs(y = variavel)
+```
+
+
+```{r}
+data_set_aux %>% 
+  ggplot(aes(x=x,y=y,color=z)) +
+  geom_point() +
+  labs(color = variavel)
+```
+
+### Análise geoestatística
+
+Criar o arquivo para análise
+
+```{r}
+coordinates(data_set_aux) = ~ x + y  
+form <- z ~ 1 # fórmula da função variogram
+```
+
+Construir o semivariograma experimental
+
+```{r}
+vari_exp <- variogram(form, data = data_set_aux,
+                      cressie = FALSE,
+                      cutoff = 0.3, 
+                      width = .005)
+vari_exp  %>%  
+ ggplot(aes(x=dist, y=gamma)) +
+ geom_point() +
+ labs(x="lag (º)",
+      y=expression(paste(gamma,"(h)")))
+```
+
+
+Modelar o semivariograma
+```{r}
+modelo <- fit.variogram(vari_exp,
+                        vgm(500,"Sph",0.02,0) #psill, mod, alcance, efeito pepita
+)
+plot(vari_exp,model=modelo, col=1,pl=F,pch=16)
+```
+
+
+
+
+### Krigragem ordinária (KO)
+
+Utilizando o algorítmo de KO, vamos estimar xco2 nos locais não amostrados.
+
+
+    
+```{r}
+ko_variavel <- krige(formula=form, data_set_aux, grid, model=modelo, 
+    block=c(0,0),
+    nsim=0,
+    na.action=na.pass,
+    debug.level=-1,  
+    )
+```
+    
+    
+Mapa de padrão espacial
+
+```{r}
+mapa <- as.tibble(ko_variavel) %>% 
+  ggplot(aes(x=X, y=Y)) + 
+  geom_tile(aes(fill = var1.pred)) +
+  # scale_fill_gradient(low = "yellow", high = "blue") + 
+  scale_fill_viridis_c() +
+  coord_equal() + 
+  labs(fill=variavel,
+       x="Longitude",
+       y="Latitude")
+mapa
+ggsave(paste0("mapas/krigagem-",variavel,"-",ano_analise,".png"))
+```
+
+
+Salvando o arquivo krigado
+
+```{r}
+df <- ko_variavel %>% 
+  as.tibble() %>% 
+  mutate(var1.var = sqrt(var1.var)) %>% 
+  rename(
+    !!variavel := var1.pred,
+    !!paste0(variavel,"_sd") := var1.var,
+  )
+write_rds(df,paste0("saida/",variavel,"-",ano_analise,".rds"))
+```
+

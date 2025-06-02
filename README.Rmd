@@ -27,6 +27,10 @@ library(readxl)
 library(gstat)
 library(plotly)
 library(nortest)
+library(car)
+library(corrplot)
+library(GGally)
+library(psych)
 theme_set(theme_bw())
 ```
 
@@ -36,10 +40,10 @@ theme_set(theme_bw())
 # list_files <- list.files("data-raw", full.names = TRUE)
 # 
 # my_read_xl <- function(path){
-#   read_excel(path) %>% 
+#   read_excel(path) |> 
 #     mutate(
 #   ano = str_extract(path,"[0-9]+")
-#   ) %>% relocate(ano)
+#   ) |> relocate(ano)
 # }
 # my_read_xl(list_files[3])
 # dff <- map_df(list_files,my_read_xl)
@@ -66,9 +70,9 @@ def_pol <- function(x, y, pol){
 x<-data_set$x
 y<-data_set$y
 dis <- 0.005 #Distância entre pontos
-grid <- expand.grid(X=seq(min(x),max(x),dis), Y=seq(min(y),max(y),dis)) %>% 
-    mutate(flag = def_pol(X,Y,contorno)) %>%  
-  filter(flag) %>% select(-flag)
+grid <- expand.grid(X=seq(min(x),max(x),dis), Y=seq(min(y),max(y),dis)) |> 
+    mutate(flag = def_pol(X,Y,contorno)) |>  
+  filter(flag) |> select(-flag)
 gridded(grid) = ~ X + Y
 plot(grid) 
 points(x,y,col="red",pch=4)
@@ -77,8 +81,8 @@ points(x,y,col="red",pch=4)
 ### Conhecendo o Banco de dados
 
 ```{r}
-data_set %>% 
-  filter(ano == 2016) %>% 
+data_set |> 
+  filter(ano == 2016) |> 
   ggplot(aes(x=x, y=y)) +
   geom_point()
 # ggplotly(plot_graph)
@@ -89,15 +93,27 @@ glimpse(data_set)
 ```
 
 
+```{r}
+df_aux <- data_set |> 
+  filter(ano == 2016) |> 
+  select(tch_real:m_1) 
+for(i in 1:length(df_aux)){
+  x_vari <- as.data.frame(df_aux)[,i]
+  print(paste("Variável:",names(df_aux[i])))
+  print(lillie.test(x_vari))
+}
+```
+
+
 # PASSO 1
 definir o ano e a variável
 
 ### Separa o banco de dados por ano e por variáveis
 ```{r}
-ano_analise <- 2018
+ano_analise <- 2016
 variavel <- "tch_real"
-data_set_aux <- data_set %>% 
-  filter(ano == ano_analise) %>% 
+data_set_aux <- data_set |> 
+  filter(ano == ano_analise) |> 
   select(x,y,variavel)
 names(data_set_aux) <- c("x","y","z")
 glimpse(data_set_aux)
@@ -105,8 +121,8 @@ glimpse(data_set_aux)
 
 ### Calcular a média da variável por ponto
 ```{r}
-data_set_aux <- data_set_aux %>% 
-  group_by(x,y) %>% 
+data_set_aux <- data_set_aux |> 
+  group_by(x,y) |> 
   summarise(
     z = mean(z,na.rm = TRUE)
   )
@@ -115,19 +131,19 @@ data_set_aux <- data_set_aux %>%
 ### Análise exoploratória
 
 ```{r}
-data_set_aux %>% 
-  pull(z) %>% 
+data_set_aux |> 
+  pull(z) |> 
   summary()
 ```
 ```{r}
-data_set_aux %>% 
+data_set_aux |> 
   ggplot(aes(y=z)) +
   geom_boxplot(fill="gray") +
   xlim(-1,1) +
   labs(y = variavel)
 ```
 ```{r}
-data_set_aux %>% 
+data_set_aux |> 
   ggplot(aes(x=z)) +
   geom_histogram(fill="gray",color="black",
                  bins = 10) +
@@ -135,16 +151,254 @@ data_set_aux %>%
 ```
 Testes de normalidade
 ```{r}
-y <- data_set_aux %>% pull(z)
+y <- data_set_aux |> pull(z)
 shapiro.test(y)
 cvm.test(y)
 lillie.test(y)
 ad.test(y)
 ```
+### verificar colinearidade
+
+```{r}
+cor_matrix <- cor(df_aux, use = "pairwise.complete.obs", method = "pearson")
+print(round(cor_matrix, 2))
+
+# Visualizar a matriz de correlação
+corrplot(cor_matrix, method = "circle", type = "upper", tl.cex = 0.8)
+```
+```{r}
+# Análise de multicolinearidade com VIF
+# É necessário ajustar um modelo linear com todas as variáveis independentes
+# Exemplo: escolha uma variável dependente qualquer (ex: y)
+modelo <- lm(tch_real~ ., data = df_aux)
+vif_valores <- vif(modelo)
+print(vif_valores)
+```
+```{r}
+# Identificar variáveis com VIF alto (>5 ou >10, dependendo do critério)
+colineares <- vif_valores[vif_valores > 10]
+print("Variáveis com possível multicolinearidade:")
+print(colineares)
+```
+
+## Regressão Linear Múltipla
+```{r}
+variaveis_validas <- df_aux |> 
+  select(-c(ca_1, mg_1,k_1,h_al_1,sb_1,ctc_1,v_1))
+
+# Criar fórmula dinâmica para regressão
+form <- as.formula(paste("tch_real ~", paste(names(variaveis_validas[-1]), collapse = " + ")))
+
+# Ajustar o modelo de regressão múltipla
+modelo_final <- lm(form, data = df_aux)
+
+# Resumo do modelo
+summary(modelo_final)
+```
+```{r}
+plot(modelo_final)
+hist(residuals(modelo_final))
+lmtest::bptest(modelo_final)  # Teste de Breusch-Pagan
+lmtest::dwtest(modelo_final)
+```
+
+## Stepwise Forward usando 
+```{r}
+# Modelo nulo (apenas intercepto)
+modelo_nulo <- lm(tch_real ~ 1, data = variaveis_validas)
+
+# Modelo completo (com todas as variáveis explicativas)
+modelo_completo <- lm(tch_real ~ ., data = variaveis_validas)
+
+# Aplicar Stepwise Forward com base no critério AIC
+modelo_step_forward <- step(
+  object = modelo_nulo,
+  scope = list(lower = modelo_nulo, upper = modelo_completo),
+  direction = "forward",
+  trace = TRUE
+)
+
+# Ver resumo do modelo final selecionado
+summary(modelo_step_forward)
+```
+## Análise de Componentes Principais
+
+```{r}
+da <- variaveis_validas[-1]
+mc <- cor(da)
+corrplot::corrplot(mc)
+```
 
 
 ```{r}
-data_set_aux %>% 
+print("======== Análise de Agrupamento Hierárquico ========== ")
+da_pad<-decostand(da, 
+                  method = "standardize",
+                  na.rm=TRUE)
+da_pad_euc<-vegdist(da_pad,"euclidean") 
+da_pad_euc_ward<-hclust(da_pad_euc, method="ward.D")
+plot(da_pad_euc_ward, 
+     ylab="Distância Euclidiana",
+     xlab="Acessos", hang=-1,
+     col="blue", las=1,
+     cex=.6,lwd=1.5);box()
+
+grupo<-cutree(da_pad_euc_ward,3)
+```
+
+
+```{r}
+print("======== Análise de Componentes Principais ========== ")
+pca <-  prcomp(da_pad,scale.=TRUE)
+# Autovalores
+eig<-pca$sdev^2
+print("==== Autovalores ====")
+print(round(eig,3))
+print("==== % da variância explicada ====")
+ve<-eig/sum(eig)
+print(round(ve,4))
+print("==== % da variância explicada acumulada ====")
+print(round(cumsum(ve),4)*100)
+print("==== Poder Discriminante ====")
+mcor<-cor(da_pad,pca$x)
+corrplot(mcor)
+print("==== screeplot ====")
+screeplot(pca)
+abline(h=1)
+```
+
+
+```{r}
+pc1V<-cor(da_pad,pca$x)[,1]/sd(cor(da_pad,pca$x)[,1])
+pc2V<-cor(da_pad,pca$x)[,2]/sd(cor(da_pad,pca$x)[,2])
+pc3V<-cor(da_pad,pca$x)[,3]/sd(cor(da_pad,pca$x)[,3])
+pc1c<-pca$x[,1]/sd(pca$x[,1])
+pc2c<-pca$x[,2]/sd(pca$x[,2])
+pc3c<-pca$x[,3]/sd(pca$x[,3])
+nv<-ncol(da) # número de variáveis utilizadas na análise
+```
+
+
+```{r}
+# gráfico biplot
+bip<-data.frame(pc1c,pc2c,pc3c,grupo)
+texto <- data.frame(
+  x = pc1V,
+  y = pc2V,
+  z = pc3V,
+  label = names(da)
+)
+
+bip |> 
+  ggplot(aes(x=pc1c,y=pc2c,color=as_factor(grupo)))+
+  geom_point(size = 3) + 
+  theme_minimal() +
+  scale_shape_manual(values=16:18)+
+  scale_color_manual(values=c("#009E73", "#999999","#D55E00")) +
+  #annotate(geom="text", x=pc1V, y=pc2V, label=names(pc1V),
+  #            color="black",font=3)+
+  geom_vline(aes(xintercept=0),
+             color="black", size=1)+
+  geom_hline(aes(yintercept=0),
+             color="black", size=1)+
+  annotate(geom="segment",
+           x=rep(0,length(da)),
+           xend=texto$x,
+           y=rep(0,length(da)),
+           yend=texto$y,color="black",lwd=.5)+
+  geom_label(data=texto,aes(x=x,y=y,label=label),
+             color="black",angle=0,fontface="bold",size=4,fill="white")+
+  labs(x=paste("CP1 (",round(100*ve[1],2),"%)",sep=""),
+       y=paste("CP2 (",round(100*ve[2],2),"%)",sep=""),
+       color="",shape="")+
+  theme(legend.position = "top")
+
+```
+```{r}
+data_set |> 
+  filter(ano == 2016) |> 
+  add_column(grupo) |> 
+  ggplot(aes(x=x,y=y,color=as_factor(grupo))) +
+  geom_point() +
+  labs(color = "Grupo")
+```
+
+
+```{r}
+print("==== Tabela da correlação dos atributos com cada PC ====")
+    ck<-sum(pca$sdev^2>=0.98)
+    tabelapca<-vector()
+    for( l in 1:ck) tabelapca<-cbind(tabelapca,mcor[,l])
+    colnames(tabelapca)<-paste(rep(c("PC"),ck),1:ck,sep="")
+    pcat<-round(tabelapca,3)
+    tabelapca<-tabelapca[order(abs(tabelapca[,1])),]
+    print(tabelapca)
+```
+## Modeloando com as 3 primeira CPS
+```{r}
+df_aux <- df_aux |> 
+  add_column(pc1c,pc2c,pc3c)
+
+# Análise de multicolinearidade com VIF
+# É necessário ajustar um modelo linear com todas as variáveis independentes
+# Exemplo: escolha uma variável dependente qualquer (ex: y)
+modelo <- lm(tch_real~ ., data = df_aux[-c(2:16)])
+vif_valores <- vif(modelo)
+print(vif_valores)
+```
+```{r}
+# Identificar variáveis com VIF alto (>5 ou >10, dependendo do critério)
+colineares <- vif_valores[vif_valores > 10]
+print("Variáveis com possível multicolinearidade:")
+print(colineares)
+```
+
+## Regressão Linear Múltipla
+```{r}
+variaveis_validas <-  df_aux[-c(2:16)]
+
+# Criar fórmula dinâmica para regressão
+form <- as.formula(paste("tch_real ~", paste(names(variaveis_validas[-1]), collapse = " + ")))
+
+# Ajustar o modelo de regressão múltipla
+modelo_final <- lm(form, data = df_aux)
+
+# Resumo do modelo
+summary(modelo_final)
+```
+```{r}
+plot(modelo_final)
+hist(residuals(modelo_final))
+```
+
+```{r}
+lmtest::bptest(modelo_final)  # Teste de Breusch-Pagan
+lmtest::dwtest(modelo_final)  # Teste de Durbin-Watson test
+```
+## Stepwise Forward usando 
+```{r}
+# Modelo nulo (apenas intercepto)
+modelo_nulo <- lm(tch_real ~ 1, data = variaveis_validas)
+
+# Modelo completo (com todas as variáveis explicativas)
+modelo_completo <- lm(tch_real ~ ., data = variaveis_validas)
+
+# Aplicar Stepwise Forward com base no critério AIC
+modelo_step_forward <- step(
+  object = modelo_nulo,
+  scope = list(lower = modelo_nulo, upper = modelo_completo),
+  direction = "forward",
+  trace = TRUE
+)
+
+# Ver resumo do modelo final selecionado
+summary(modelo_step_forward)
+```
+
+## Modelagem do semivariograma
+
+```{r}
+data_set_aux |> 
   ggplot(aes(x=x,y=y,color=z)) +
   geom_point() +
   labs(color = variavel)
@@ -168,7 +422,7 @@ vari_exp <- variogram(form, data = data_set_aux,
                       cressie = FALSE,
                       cutoff = 0.20, # distância máxima do semivariograma
                       width = .008) # distancia entre pontos
-vari_exp  %>%  
+vari_exp  |>  
  ggplot(aes(x=dist, y=gamma)) +
  geom_point() +
  labs(x="lag (º)",
@@ -188,7 +442,7 @@ sqr.f1<-round(attr(modelo_1, "SSErr"),4); c01<-round(modelo_1$psill[[1]],4); c0_
 sqr.f2<-round(attr(modelo_2, "SSErr"),4); c02<-round(modelo_2$psill[[1]],4); c0_c12<-round(sum(modelo_2$psill),4);a2<-round(3*modelo_2$range[[2]],2)
 sqr.f3<-round(attr(modelo_3, "SSErr"),4); c03<-round(modelo_3$psill[[1]],4); c0_c13<-round(sum(modelo_3$psill),4);a3<-round(modelo_3$range[[2]]*(3^.5),2)
 
-df_aux <- vari_exp %>% 
+df_aux <- vari_exp |> 
   mutate(
     gamma_m1 = ifelse(dist <= a1, c01 + (c0_c11-c01)*(3/2*(dist/a1)-1/2*(dist/a1)^3),c0_c11),
     gamma_m2 = c02 + (c0_c12-c02)*(1-exp(-3*(dist/a2))),
@@ -197,7 +451,7 @@ df_aux <- vari_exp %>%
     residuo_mod_1 = (gamma - gamma_m1)^2,
     residuo_mod_2 = (gamma - gamma_m2)^2,
     residuo_mod_3 = (gamma - gamma_m3)^2
-  ) %>% 
+  ) |> 
   summarise(
     r2_1=(sum(residuo_total) - sum(residuo_mod_1))/sum(residuo_total), 
     r2_2=(sum(residuo_total) - sum(residuo_mod_2))/sum(residuo_total), 
@@ -216,9 +470,9 @@ plot(vari_exp,model=modelo_3, col=1,pl=F,pch=16,cex=1.2,cex.main=7,ylab=list("Se
 
 
 
-```{r}
-conjunto_validacao <- data_set_aux %>% 
-  as_tibble() %>% 
+```{r,eval=FALSE}
+conjunto_validacao <- data_set_aux |> 
+  as_tibble() |> 
   sample_n(300)
 coordinates(conjunto_validacao) = ~x + y
 modelos<-list(modelo_1,modelo_2,modelo_3)
@@ -277,7 +531,7 @@ ko_variavel <- krige(formula=form, data_set_aux, grid, model=modelo,
 Mapa de padrão espacial
 
 ```{r}
-mapa <- as.tibble(ko_variavel) %>% 
+mapa <- as.tibble(ko_variavel) |> 
   ggplot(aes(x=X, y=Y)) + 
   geom_tile(aes(fill = var1.pred)) +
   # scale_fill_gradient(low = "yellow", high = "blue") + 
@@ -288,14 +542,14 @@ mapa <- as.tibble(ko_variavel) %>%
        y="Latitude")
 mapa
 ggsave(paste0("mapas/krigagem-",variavel,"-",ano_analise,".png"))
+```
 
 
+```{r}
 # Salvando o arquivo krigado
-
-
-df <- ko_variavel %>% 
-  as.tibble() %>% 
-  mutate(var1.var = sqrt(var1.var)) %>% 
+df <- ko_variavel |> 
+  as.tibble() |> 
+  mutate(var1.var = sqrt(var1.var)) |> 
   rename(
     !!variavel := var1.pred,
     !!paste0(variavel,"_sd") := var1.var,

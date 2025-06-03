@@ -10,13 +10,14 @@ knitr::opts_chunk$set(
   warning = FALSE,
   message = FALSE,
   error = FALSE,
-  comment = "#>"
+  comment = "#>",
+  eval = FALSE
 )
 ```
 
 # Análise de dados - Messias
 
-Banco de dados referente à produção da cana-de-açúcar, anos de 2016 a 2018, e atributos do solo.
+Banco de dados referente à produção da cana-de-açúcar, anos de 2016 e atributos do solo.
 
 ### Carregando pacotes
 ```{r}
@@ -102,6 +103,80 @@ for(i in 1:length(df_aux)){
   print(paste("Variável:",names(df_aux[i])))
   print(lillie.test(x_vari))
 }
+estat_names <- c("Min","Q1","Med","Média","Q3",
+                 "Max","DP","CV","Skn","Krt")
+estat_desc <- function(x){
+  m <- mean(x,na.rm = TRUE)
+  md <- median(x)
+  mini <- min(x,na.rm = TRUE)
+  q1 <- quantile(x,.25)
+  q3 <- quantile(x,.75)
+  maxi <- max(x,na.rm = TRUE)
+  dp <- sd(x,na.rm = TRUE)
+  cv <- 100*dp/m
+  ass <- agricolae::skewness(x)
+  curt <- agricolae::kurtosis(x)
+  c(mini,q1,md,m,q3,maxi,dp,cv,ass,curt)
+}
+
+data_set |> 
+  filter(ano == 2016) |> 
+  group_by(x,y) |> 
+  summarise(
+    across(
+      tch_real:m_1,
+     ~mean(.,na.rm=TRUE),
+     .names = "{.col}"
+    ),
+    .groups = "drop"
+  ) |> 
+  reframe(
+    across(
+      tch_real:m_1,
+      estat_desc
+    ),
+  ) |> add_column(estat_names) |> relocate(estat_names) |> 
+  writexl::write_xlsx("saida/estat-desc.xlsx")
+```
+
+### Tranformação para adequação das variáveis
+```{r}
+data_set |> 
+  mutate(
+    s_1 = log(s_1),
+    ca_1 = log(ca_1),
+    p_resina_1 = log(p_resina_1),
+    sb_1 = log(sb_1),
+    m_1 = log(m_1+1),
+    ctc_1 = log(ctc_1),
+  )|> 
+  filter(ano == 2016) |> 
+  group_by(x,y) |> 
+  summarise(
+    across(
+      tch_real:m_1,
+     ~mean(.,na.rm=TRUE),
+     .names = "{.col}"
+    ),
+    .groups = "drop"
+  ) |> 
+  reframe(
+    across(
+      tch_real:m_1,
+      estat_desc
+    ),
+  ) |> add_column(estat_names) |> 
+  relocate(estat_names)
+
+df_aux <- data_set |> 
+  mutate(
+    s_1 = log(s_1),
+    ca_1 = log(ca_1),
+    p_resina_1 = log(p_resina_1+1),
+    sb_1 = log(sb_1),
+    m_1 = log(m_1+1)) |> 
+  filter(ano == 2016) |> 
+  select(tch_real:m_1)
 ```
 
 
@@ -124,7 +199,8 @@ glimpse(data_set_aux)
 data_set_aux <- data_set_aux |> 
   group_by(x,y) |> 
   summarise(
-    z = mean(z,na.rm = TRUE)
+    z = mean(z,na.rm = TRUE),
+    .groups = "drop"
   )
 ```
 
@@ -184,7 +260,7 @@ print(colineares)
 ## Regressão Linear Múltipla
 ```{r}
 variaveis_validas <- df_aux |> 
-  select(-c(ca_1, mg_1,k_1,h_al_1,sb_1,ctc_1,v_1))
+  select(-c(ca_1, h_al_1,sb_1,v_1))
 
 # Criar fórmula dinâmica para regressão
 form <- as.formula(paste("tch_real ~", paste(names(variaveis_validas[-1]), collapse = " + ")))
@@ -224,7 +300,7 @@ summary(modelo_step_forward)
 ## Análise de Componentes Principais
 
 ```{r}
-da <- variaveis_validas[-1]
+da <- df_aux[-c(2,10)]
 mc <- cor(da)
 corrplot::corrplot(mc)
 ```
@@ -243,7 +319,7 @@ plot(da_pad_euc_ward,
      col="blue", las=1,
      cex=.6,lwd=1.5);box()
 
-grupo<-cutree(da_pad_euc_ward,3)
+grupo<-cutree(da_pad_euc_ward,2)
 ```
 
 
@@ -334,66 +410,7 @@ print("==== Tabela da correlação dos atributos com cada PC ====")
     tabelapca<-tabelapca[order(abs(tabelapca[,1])),]
     print(tabelapca)
 ```
-## Modeloando com as 3 primeira CPS
-```{r}
-df_aux <- df_aux |> 
-  add_column(pc1c,pc2c,pc3c)
 
-# Análise de multicolinearidade com VIF
-# É necessário ajustar um modelo linear com todas as variáveis independentes
-# Exemplo: escolha uma variável dependente qualquer (ex: y)
-modelo <- lm(tch_real~ ., data = df_aux[-c(2:16)])
-vif_valores <- vif(modelo)
-print(vif_valores)
-```
-```{r}
-# Identificar variáveis com VIF alto (>5 ou >10, dependendo do critério)
-colineares <- vif_valores[vif_valores > 10]
-print("Variáveis com possível multicolinearidade:")
-print(colineares)
-```
-
-## Regressão Linear Múltipla
-```{r}
-variaveis_validas <-  df_aux[-c(2:16)]
-
-# Criar fórmula dinâmica para regressão
-form <- as.formula(paste("tch_real ~", paste(names(variaveis_validas[-1]), collapse = " + ")))
-
-# Ajustar o modelo de regressão múltipla
-modelo_final <- lm(form, data = df_aux)
-
-# Resumo do modelo
-summary(modelo_final)
-```
-```{r}
-plot(modelo_final)
-hist(residuals(modelo_final))
-```
-
-```{r}
-lmtest::bptest(modelo_final)  # Teste de Breusch-Pagan
-lmtest::dwtest(modelo_final)  # Teste de Durbin-Watson test
-```
-## Stepwise Forward usando 
-```{r}
-# Modelo nulo (apenas intercepto)
-modelo_nulo <- lm(tch_real ~ 1, data = variaveis_validas)
-
-# Modelo completo (com todas as variáveis explicativas)
-modelo_completo <- lm(tch_real ~ ., data = variaveis_validas)
-
-# Aplicar Stepwise Forward com base no critério AIC
-modelo_step_forward <- step(
-  object = modelo_nulo,
-  scope = list(lower = modelo_nulo, upper = modelo_completo),
-  direction = "forward",
-  trace = TRUE
-)
-
-# Ver resumo do modelo final selecionado
-summary(modelo_step_forward)
-```
 
 ## Modelagem do semivariograma
 

@@ -302,8 +302,27 @@ summary(modelo_step_forward)
 ```{r}
 da <- df_aux[-c(2,10)]
 mc <- cor(da)
-corrplot::corrplot(mc)
+rownames(mc) <-c("TCH","pH","MO","P","S","Ca","Mg","K","H+Al","SB",
+                 "CTC","V%","m%")
+colnames(mc) <-c("TCH","pH","MO","P","S","Ca","Mg","K","H+Al","SB",
+                 "CTC","V%","m%")
+# corrplot::corrplot.mixed(mc,upper = "square",
+#                          tl.col = "black",
+#                          tl.cex = .9,
+#                          lower.col = "black",
+#                          number.cex = 0.7)
+
+corrplot(mc,method = "color",
+         outline = T,,
+         addgrid.col = "darkgray",cl.pos = "r", tl.col = "black",
+         tl.cex = 1, cl.cex = 1, type = "upper", bg="azure2",
+         diag = FALSE,
+         addCoef.col = "black",
+         # cl.ratio = 0.2,
+         cl.length = 5,
+         number.cex = 0.8) 
 ```
+
 
 
 ```{r}
@@ -362,15 +381,16 @@ texto <- data.frame(
   x = pc1V,
   y = pc2V,
   z = pc3V,
-  label = names(da)
+  label = rownames(mc)
 )
-
-bip |> 
-  ggplot(aes(x=pc1c,y=pc2c,color=as_factor(grupo)))+
-  geom_point(size = 3) + 
+c("TCH","pH","MO","P","S","Ca","Mg","K","H+Al","SB",
+                 "CTC","V%","m%")
+bi_plot <- bip |> 
+  ggplot(aes(x=pc1c,y=pc2c))+
+  geom_point(size = 1,color="gray") + 
   theme_minimal() +
-  scale_shape_manual(values=16:18)+
-  scale_color_manual(values=c("#009E73", "#999999","#D55E00")) +
+  # scale_shape_manual(values=16:18)+
+  # scale_color_manual(values=c("#009E73", "#999999","#D55E00")) +
   #annotate(geom="text", x=pc1V, y=pc2V, label=names(pc1V),
   #            color="black",font=3)+
   geom_vline(aes(xintercept=0),
@@ -388,8 +408,17 @@ bip |>
        y=paste("CP2 (",round(100*ve[2],2),"%)",sep=""),
        color="",shape="")+
   theme(legend.position = "top")
+bi_plot
+```
+```{r}
+bi_plot +
+  coord_cartesian(
+    xlim = c(-1.8,1.5),
+    ylim = c(-2.5,1.5)
+  )
 
 ```
+
 ```{r}
 data_set |> 
   filter(ano == 2016) |> 
@@ -409,6 +438,8 @@ print("==== Tabela da correlação dos atributos com cada PC ====")
     pcat<-round(tabelapca,3)
     tabelapca<-tabelapca[order(abs(tabelapca[,1])),]
     print(tabelapca)
+writexl::write_xlsx(data.frame(tabelapca) |> 
+                      add_column(nome = row.names(tabelapca)), "saida/pca-table.xlsx")
 ```
 
 
